@@ -1,0 +1,27 @@
+#break *0x4200b140
+#break *0x4200af2c
+
+
+
+#    monitor system_reset
+
+ 
+break *0x4200757c
+commands
+  silent
+  printf "setting interrupt %d from 0x%X\n", $a10, ($a8 - 0x40000000)
+  cont
+end
+
+break *0x42012e5c
+break *0x4203bb04
+break *0x4200b1ec
+break *0x4202d328
+break *0x42027e88
+
+
+set *(unsigned int*)(0x60008800+0xC) = 0x10000
+set *(unsigned int*)(0x60008800+0x30) = 0x10000
+
+cont
+
