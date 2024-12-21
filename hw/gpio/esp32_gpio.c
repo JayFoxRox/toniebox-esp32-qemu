@@ -33,12 +33,46 @@ static uint64_t esp32_gpio_read(void *opaque, hwaddr addr, unsigned int size)
     default:
         break;
     }
+
+    printf("\t\tgpio read addr=0x%lx size=%u  => 0x%lx\n", addr, size, r);
     return r;
 }
 
 static void esp32_gpio_write(void *opaque, hwaddr addr,
                        uint64_t value, unsigned int size)
 {
+  printf("\t\tgpio write addr=0x%lx size=%u <= 0x%lx\n", addr, size, value);
+
+
+#if 0
+GPIO_OUT_REG GPIO0 ~ 31 output register 0x0004 R/W
+GPIO_OUT_W1TS_REG GPIO0 ~ 31 output bit set register 0x0008 WO
+GPIO_OUT_W1TC_REG GPIO0 ~ 31 output bit clear register 0x000C WO
+
+GPIO_OUT1_REG GPIO32 ~ 48 output register 0x0010 R/W
+GPIO_OUT1_W1TS_REG GPIO32 ~ 48 output bit set register 0x0014 WO
+GPIO_OUT1_W1TC_REG GPIO32 ~ 48 output bit clear register 0x0018 WO
+
+
+GPIO_ENABLE_REG GPIO0 ~ 31 output enable register 0x0020 R/W
+GPIO_ENABLE_W1TS_REG GPIO0 ~ 31 output enable bit set register 0x0024 WO
+GPIO_ENABLE_W1TC_REG GPIO0 ~ 31 output enable bit clear register 0x0028 WO
+
+GPIO_ENABLE1_REG GPIO32 ~ 48 output enable register 0x002C R/W
+GPIO_ENABLE1_W1TS_REG GPIO32 ~ 48 output enable bit set register 0x0030 WO
+GPIO_ENABLE1_W1TC_REG GPIO32 ~ 48 output enable bit clear register 0x0034 
+#endif
+
+  if ((addr >= 0x74) && (addr <= 0x0134)) {
+    int gpio = (addr - 0x74) / 4;
+    printf("\t\t\tGPIO%d configuration\n", gpio);
+  } else if ((addr >= 0x554) && (addr <= 0x0614)) {
+    int gpio = (addr - 0x554) / 4;
+    printf("\t\t\tGPIO%d peripheral output selection\n", gpio);
+  } else {
+    // nop
+  }
+
 }
 
 static const MemoryRegionOps uart_ops = {

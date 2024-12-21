@@ -32,6 +32,7 @@
 #include "hw/xtensa/esp32s3_intc.h"
 
 #include "hw/misc/ssi_psram.h"
+#include "hw/sd/dwc_sdmmc.h"
 #include "core-esp32s3/core-isa.h"
 #include "qemu/datadir.h"
 #include "sysemu/sysemu.h"
@@ -63,6 +64,8 @@
 #include "hw/misc/esp32s3_xts_aes.h"
 #include "hw/misc/esp32s3_pms.h"
 
+#include "esp32s3_i2s.h"
+
 #include "cpu_esp32s3.h"
 
 #include "hw/misc/esp32c3_jtag.h"
@@ -84,6 +87,8 @@ enum {
     ESP32S3_MEMREGION_RTCSLOW,
     ESP32S3_MEMREGION_RTCFAST,
     ESP32S3_MEMREGION_FRAMEBUF,
+
+    ESP32S3_MEMREGION_SENS
 };
 
 static const struct MemmapEntry {
@@ -100,6 +105,15 @@ static const struct MemmapEntry {
     [ESP32S3_MEMREGION_RTCFAST] = { 0x600fe000, 0x2000 },
     /* Virtual Framebuffer, used for the graphical interface */
     [ESP32S3_MEMREGION_FRAMEBUF] = { 0x20000000, ESP_RGB_MAX_VRAM_SIZE },
+
+
+    // Stuck at 0x4203f567 in ota_2
+    // Checks `x>>0x10 & 1` which is `x & (1 << 0x10)` or `x & 0x10000`
+    // for` x=*(uint32_t*)(0x60008800+0xC) and x=*(uint32_t*)(0x60008800+0x30)
+    // check: x/10xb 0x60008800+0xC
+    // set *(unsigned int*)(0x60008800+0xC) = 0x10000
+    // set *(unsigned int*)(0x60008800+0x30) = 0x10000
+    [ESP32S3_MEMREGION_SENS] = { DR_REG_SENS_BASE, 0x1000 }, // not sure about size; just a stupid dummy
 };
 
 
@@ -147,6 +161,11 @@ typedef struct Esp32s3SocState {
 
     ESP32C3UsbJtagState jtag;
     ESPRgbState rgb;
+
+    Esp32S3I2SState i2s;
+    Esp32S3I2SState i2s1;
+
+    DWCSDMMCState sdmmc;
 
     MemoryRegion iomem;
     DeviceState *eth;
@@ -342,6 +361,8 @@ static void esp32s3_soc_realize(DeviceState *dev, Error **errp)
     MemoryRegion *rtcslow = g_new(MemoryRegion, 1);
     MemoryRegion *rtcfast = g_new(MemoryRegion, 1);
 
+    MemoryRegion *sens = g_new(MemoryRegion, 1);
+
     for (int i = 0; i < ms->smp.cpus; ++i) {
         MemoryRegion *drom = g_new(MemoryRegion, 1);
         MemoryRegion *irom = g_new(MemoryRegion, 1);
@@ -371,6 +392,13 @@ static void esp32s3_soc_realize(DeviceState *dev, Error **errp)
     memory_region_init_ram(rtcfast, NULL, "esp32s3.rtcfast",
                            memmap[ESP32S3_MEMREGION_RTCFAST].size, &error_fatal);
     memory_region_add_subregion(&s->cpu_specific_mem[0], memmap[ESP32S3_MEMREGION_RTCFAST].base, rtcfast);
+
+
+    memory_region_init_ram(sens, NULL, "esp32s3.sens",
+                           memmap[ESP32S3_MEMREGION_SENS].size, &error_fatal);
+    memory_region_add_subregion(sys_mem, memmap[ESP32S3_MEMREGION_SENS].base, sens);
+
+
 
     for (int i = 0; i < ms->smp.cpus; ++i) {
         qdev_realize(DEVICE(&s->cpu[i]), NULL, &error_fatal);
@@ -564,6 +592,39 @@ static void esp32s3_soc_add_unimp_device(MemoryRegion *dest, const char* name, h
     g_free(name_apb);
 }
 
+#if 0
+static void esp32s3_machine_init_i2c(Esp32s3SocState *s)
+{
+    /* It should be possible to create an I2C device from the command line,
+     * however for this to work the I2C bus must be reachable from sysbus-default.
+     * At the moment the peripherals are added to an unrelated bus, to avoid being
+     * reset on CPU reset.
+     * If we find a way to decouple peripheral reset from sysbus reset,
+     * we can move them to the sysbus and thus enable creation of i2c devices.
+     */
+    DeviceState *i2c_master = DEVICE(&s->i2c[0]);
+    I2CBus* i2c_bus = I2C_BUS(qdev_get_child_bus(i2c_master, "i2c"));
+    I2CSlave* tmp105 = i2c_slave_create_simple(i2c_bus, "tmp105", 0x48);
+    object_property_set_int(OBJECT(tmp105), "temperature", 25 * 1000, &error_fatal);
+}
+#endif
+
+static void esp32s3_machine_init_sd(Esp32s3SocState *ss)
+{
+    DriveInfo *dinfo = drive_get(IF_SD, 0, 0);
+    if (dinfo) {
+        DeviceState *card;
+
+        card = qdev_new(TYPE_SD_CARD);
+        qdev_prop_set_drive_err(card, "drive", blk_by_legacy_dinfo(dinfo),
+                                &error_fatal);
+        /* See the comment on not using sysbus-default in esp32_machine_init_i2c */
+        DeviceState *sdmmc = DEVICE(&ss->sdmmc);
+        SDBus* sd_bus = SD_BUS(qdev_get_child_bus(sdmmc, "sd-bus"));
+        qdev_realize_and_unref(card, BUS(sd_bus), &error_fatal);
+    }
+}
+
 static void esp32s3_machine_init(MachineState *machine)
 {
     DriveInfo *dinfo = drive_get(IF_MTD, 0, 0);
@@ -621,6 +682,11 @@ static void esp32s3_machine_init(MachineState *machine)
     object_initialize_child(OBJECT(ss), "timg1", &ss->timg[1], TYPE_ESP32C3_TIMG);
     object_initialize_child(OBJECT(ss), "systimer", &ss->systimer, TYPE_ESP32S3_SYSTIMER);
     object_initialize_child(OBJECT(ss), "rgb", &ss->rgb, TYPE_ESP_RGB);
+
+    object_initialize_child(OBJECT(ss), "i2s", &ss->i2s, TYPE_ESP32S3_I2S);
+    object_initialize_child(OBJECT(ss), "i2s1", &ss->i2s1, TYPE_ESP32S3_I2S);
+
+    object_initialize_child(OBJECT(ss), "sdmmc", &ss->sdmmc, TYPE_DWC_SDMMC);
 
     DeviceState* intmatrix_dev = DEVICE(&ss->intmatrix);
     {
@@ -814,6 +880,11 @@ static void esp32s3_machine_init(MachineState *machine)
         memory_region_add_subregion_overlap(sys_mem, DR_REG_AES_XTS_BASE, mr, 0);
     }
 
+    qdev_realize(DEVICE(&ss->sdmmc), &ss->periph_bus, &error_abort);
+    esp32s3_soc_add_periph_device(sys_mem, &ss->sdmmc, DR_REG_SDMMC_BASE);
+    sysbus_connect_irq(SYS_BUS_DEVICE(&ss->sdmmc), 0,
+                       qdev_get_gpio_in(intmatrix_dev, ETS_SDIO_HOST_INTR_SOURCE));
+
     /* RGB display realization */
     {
         /* Give the internal RAM memory region to the display */
@@ -824,8 +895,25 @@ static void esp32s3_machine_init(MachineState *machine)
         memory_region_add_subregion_overlap(sys_mem, esp32s3_memmap[ESP32S3_MEMREGION_FRAMEBUF].base, &ss->rgb.vram, 0);
     }
 
+    {
+      sysbus_realize(SYS_BUS_DEVICE(&ss->i2s), &error_fatal);
+      MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->i2s), 0);
+      memory_region_add_subregion_overlap(sys_mem, DR_REG_I2S_BASE, mr, 0);
+
+      sysbus_realize(SYS_BUS_DEVICE(&ss->i2s1), &error_fatal);
+      MemoryRegion *mr1 = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->i2s1), 0);
+      memory_region_add_subregion_overlap(sys_mem, DR_REG_I2S1_BASE, mr1, 0);
+    }
+
+//    esp32s3_soc_add_unimp_device(sys_mem, "esp32s3.i2s0", , 0x1000);
+//    esp32s3_soc_add_unimp_device(sys_mem, "esp32s3.i2s1", , 0x1000);
+
     esp32s3_soc_add_unimp_device(sys_mem, "esp32s3.rmt", DR_REG_RMT_BASE, 0x1000);
     esp32s3_soc_add_unimp_device(sys_mem, "esp32s3.iomux", DR_REG_IO_MUX_BASE, 0x2000);
+
+    //esp32s3_machine_init_i2c(ss);
+
+    esp32s3_machine_init_sd(ss);
 
     /* Need MMU initialized prior to ELF loading,
      * so that ELF gets loaded into virtual addresses

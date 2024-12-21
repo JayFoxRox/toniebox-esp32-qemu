@@ -410,6 +410,8 @@ static void dwc_sdmmc_write(void *opaque, hwaddr offset,
 {
     DWCSDMMCState *s = DWC_SDMMC(opaque);
 
+    printf("\t\tsdmmc write\n");
+
     switch (offset) {
         case A_SDMMC_CTRL:
             s->ctrl = value;
@@ -517,6 +519,9 @@ static uint64_t dwc_sdmmc_read(void *opaque, hwaddr offset,
         default:
             qemu_log_mask(LOG_UNIMP, "%s: read@0x%02x\n", __func__, (uint32_t) offset);
     }
+
+    printf("\t\tsdmmc read\n");
+
     return 0;
 }
 
