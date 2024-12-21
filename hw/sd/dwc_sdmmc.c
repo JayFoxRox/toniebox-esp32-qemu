@@ -56,8 +56,10 @@
  * or is heavily inspired by it.
  */
 
+#define DWC_SDMMC_DEBUG
+
 #ifdef DWC_SDMMC_DEBUG
-#define DEBUG(...) qemu_log(__VA_ARGS__)
+#define DEBUG(...) printf(__VA_ARGS__) //qemu_log(__VA_ARGS__)
 #else
 #define DEBUG(...)
 #endif
