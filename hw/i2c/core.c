@@ -240,6 +240,8 @@ void i2c_end_transfer(I2CBus *bus)
     I2CSlaveClass *sc;
     I2CNode *node, *next;
 
+printf("i2c end transfer\n");
+
     QLIST_FOREACH_SAFE(node, &bus->current_devs, next, next) {
         I2CSlave *s = node->elt;
         sc = I2C_SLAVE_GET_CLASS(s);
@@ -260,6 +262,8 @@ int i2c_send(I2CBus *bus, uint8_t data)
     I2CNode *node;
     int ret = 0;
 
+printf("i2c send\n");
+
     QLIST_FOREACH(node, &bus->current_devs, next) {
         s = node->elt;
         sc = I2C_SLAVE_GET_CLASS(s);
@@ -276,6 +280,8 @@ int i2c_send(I2CBus *bus, uint8_t data)
 
 int i2c_send_async(I2CBus *bus, uint8_t data)
 {
+
+printf("i2c send async\n");
     I2CNode *node = QLIST_FIRST(&bus->current_devs);
     I2CSlave *slave = node->elt;
     I2CSlaveClass *sc = I2C_SLAVE_GET_CLASS(slave);
@@ -297,6 +303,8 @@ uint8_t i2c_recv(I2CBus *bus)
     I2CSlaveClass *sc;
     I2CSlave *s;
 
+printf("i2c recv\n");
+
     if (!QLIST_EMPTY(&bus->current_devs) && !bus->broadcast) {
         sc = I2C_SLAVE_GET_CLASS(QLIST_FIRST(&bus->current_devs)->elt);
         if (sc->recv) {
@@ -314,6 +322,8 @@ void i2c_nack(I2CBus *bus)
     I2CSlaveClass *sc;
     I2CNode *node;
 
+printf("i2c nack\n");
+
     if (QLIST_EMPTY(&bus->current_devs)) {
         return;
     }
@@ -329,6 +339,9 @@ void i2c_nack(I2CBus *bus)
 
 void i2c_ack(I2CBus *bus)
 {
+
+printf("i2c ack\n");
+
     if (!bus->bh) {
         return;
     }
