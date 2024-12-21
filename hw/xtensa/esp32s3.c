@@ -64,6 +64,10 @@
 #include "hw/misc/esp32s3_xts_aes.h"
 #include "hw/misc/esp32s3_pms.h"
 
+#include "hw/i2c/esp32_i2c.h"
+
+#include "lis3dh.h"
+
 #include "esp32s3_i2s.h"
 
 #include "cpu_esp32s3.h"
@@ -144,6 +148,7 @@ typedef struct Esp32s3SocState {
 
     MemoryRegion cpu_specific_mem[ESP32S3_CPU_COUNT];
     ESP32S3SpiState spi1;
+    Esp32I2CState i2c[ESP32S3_I2C_COUNT];
     ESP32S3CacheState cache;
     ESP32S3EfuseState efuse;
     ESP32S3ClockState clock;
@@ -225,6 +230,9 @@ static void esp32s3_soc_reset(DeviceState *dev)
         device_cold_reset(DEVICE(&s->intmatrix));
         for (int i = 0; i < ESP32S3_UART_COUNT; ++i) {
             device_cold_reset(DEVICE(&s->uart[i]));
+        }
+        for (int i = 0; i < ESP32S3_I2C_COUNT; i++) {
+            device_cold_reset(DEVICE(&s->i2c[i]));
         }
     }
     if (s->requested_reset & ESP32S3_SOC_RESET_PROCPU) {
@@ -487,7 +495,6 @@ static void esp32s3_soc_init(Object *obj)
     char name[16];
     MemoryRegion *system_memory = get_system_memory();
 
-
     qbus_init(&s->periph_bus, sizeof(s->periph_bus),
                         TYPE_SYSTEM_BUS, DEVICE(s), "esp32-periph-bus");
     qbus_init(&s->rtc_bus, sizeof(s->rtc_bus),
@@ -592,9 +599,9 @@ static void esp32s3_soc_add_unimp_device(MemoryRegion *dest, const char* name, h
     g_free(name_apb);
 }
 
-#if 0
 static void esp32s3_machine_init_i2c(Esp32s3SocState *s)
 {
+
     /* It should be possible to create an I2C device from the command line,
      * however for this to work the I2C bus must be reachable from sysbus-default.
      * At the moment the peripherals are added to an unrelated bus, to avoid being
@@ -604,10 +611,23 @@ static void esp32s3_machine_init_i2c(Esp32s3SocState *s)
      */
     DeviceState *i2c_master = DEVICE(&s->i2c[0]);
     I2CBus* i2c_bus = I2C_BUS(qdev_get_child_bus(i2c_master, "i2c"));
+#if 0
     I2CSlave* tmp105 = i2c_slave_create_simple(i2c_bus, "tmp105", 0x48);
     object_property_set_int(OBJECT(tmp105), "temperature", 25 * 1000, &error_fatal);
-}
 #endif
+
+    // 0x18 should be DAC3100?!
+    // Looks like this is not being talked to
+
+    // Either 0x18 or 0x19 depending on hw config (0x19 in toniebox)
+    I2CSlave* lis3dh = i2c_slave_create_simple(i2c_bus, "lis3dh", 0x18 | 1);
+    printf("%p\n", lis3dh);
+
+    // 0x1C or 0x1D should be MMA8451 (0x1D in toniebox)
+    
+
+    //object_property_set_int(OBJECT(tmp105), "temperature", 25 * 1000, &error_fatal);
+}
 
 static void esp32s3_machine_init_sd(Esp32s3SocState *ss)
 {
@@ -627,6 +647,7 @@ static void esp32s3_machine_init_sd(Esp32s3SocState *ss)
 
 static void esp32s3_machine_init(MachineState *machine)
 {
+    char name[16];
     DriveInfo *dinfo = drive_get(IF_MTD, 0, 0);
     BlockBackend* blk = NULL;
     if (dinfo) {
@@ -659,6 +680,11 @@ static void esp32s3_machine_init(MachineState *machine)
     // qdev_prop_set_chr(DEVICE(ss), "serial2", serial_hd(2));
 
     qdev_realize(DEVICE(ss), NULL, &error_fatal);
+
+    for (int i = 0; i < ESP32S3_I2C_COUNT; ++i) {
+        snprintf(name, sizeof(name), "i2c%d", i);
+        object_initialize_child(OBJECT(ss), name, &ss->i2c[i], TYPE_ESP32_I2C);
+    }
 
     object_initialize_child(OBJECT(ss), "extmem", &ss->cache, TYPE_ESP32S3_CACHE);
     object_initialize_child(OBJECT(ss), "spi1", &ss->spi1, TYPE_ESP32S3_SPI);
@@ -790,6 +816,19 @@ static void esp32s3_machine_init(MachineState *machine)
         }
     }
 
+    /* I2C realization */
+    for (int i = 0; i < ESP32S3_I2C_COUNT; i++) {
+        const hwaddr i2c_base[] = {
+            DR_REG_I2C_EXT_BASE, DR_REG_I2C1_EXT_BASE
+        };
+        qdev_realize(DEVICE(&ss->i2c[i]), &ss->periph_bus, &error_fatal);
+
+        esp32s3_soc_add_periph_device(sys_mem, &ss->i2c[i], i2c_base[i]);
+
+        sysbus_connect_irq(SYS_BUS_DEVICE(&ss->i2c[i]), 0,
+                           qdev_get_gpio_in(intmatrix_dev, ETS_I2C_EXT0_INTR_SOURCE + i));
+    }
+
 
     /* GPIO realization */
     {
@@ -911,7 +950,7 @@ static void esp32s3_machine_init(MachineState *machine)
     esp32s3_soc_add_unimp_device(sys_mem, "esp32s3.rmt", DR_REG_RMT_BASE, 0x1000);
     esp32s3_soc_add_unimp_device(sys_mem, "esp32s3.iomux", DR_REG_IO_MUX_BASE, 0x2000);
 
-    //esp32s3_machine_init_i2c(ss);
+    esp32s3_machine_init_i2c(ss);
 
     esp32s3_machine_init_sd(ss);
 
